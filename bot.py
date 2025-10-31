@@ -1,6 +1,27 @@
 import requests
 import time
 import os
+from datetime import datetime, timedelta
+
+# --- PENGATURAN DEBUG ---
+# Ubah menjadi True jika Anda ingin melihat log debug dan SEMUA pesan error
+SHOW_DEBUG = False
+# -------------------------
+
+# Coba impor colorama untuk output berwarna
+try:
+    import colorama
+    from colorama import Fore, Style
+    colorama.init(autoreset=True)
+except ImportError:
+    print("Modul 'colorama' tidak ditemukan. Menjalankan tanpa warna.")
+    print("Silakan install dengan: pip install colorama")
+    # Buat class dummy agar skrip tidak error jika colorama tidak ada
+    class DummyColor:
+        def __getattr__(self, name):
+            return ""
+    Fore = DummyColor()
+    Style = DummyColor()
 
 # --- PENGATURAN UTAMA ---
 CAPTCHA_WEBSITE_URL = "https://sandchain-hub.caldera.xyz/"
@@ -29,12 +50,12 @@ HEADERS = {
 def read_file_lines(filename):
     """Membaca semua baris dari file dan mengembalikannya sebagai list."""
     if not os.path.exists(filename):
-        print(f"❌ Error: File '{filename}' tidak ditemukan.")
+        print(f"{Fore.RED}❌ Error: File '{filename}' tidak ditemukan.")
         return None
     with open(filename, 'r') as f:
         lines = [line.strip() for line in f if line.strip()]
         if not lines:
-            print(f"❌ Error: File '{filename}' kosong.")
+            print(f"{Fore.RED}❌ Error: File '{filename}' kosong.")
             return None
         return lines
 
@@ -61,12 +82,13 @@ def format_proxy(proxy_string):
             'https': proxy_url
         }
     except Exception as e:
-        print(f"  ⚠️ Warning: Format proxy tidak valid '{proxy_string}': {e}")
+        if SHOW_DEBUG:
+            print(f"  {Fore.YELLOW}⚠️ Warning: Format proxy tidak valid '{proxy_string}': {e}")
         return None
 
 def solve_captcha(api_key, proxy_dict):
     """Fungsi gabungan untuk menyelesaikan CAPTCHA dan mengembalikan token."""
-    print("  ↪️ Memulai proses penyelesaian CAPTCHA...")
+    print(f"  {Fore.CYAN}↪️ Memulai proses penyelesaian CAPTCHA...")
     
     # 1. Create Task
     create_task_url = "https://api.2captcha.com/createTask"
@@ -79,11 +101,11 @@ def solve_captcha(api_key, proxy_dict):
         }
     }
     
-    print(f"  🔍 DEBUG: Mengirim request ke 2Captcha...")
-    print(f"  🔍 DEBUG: API Key: {api_key[:10]}...{api_key[-5:]}")
+    if SHOW_DEBUG:
+        print(f"  {Style.DIM + Fore.MAGENTA}🔍 DEBUG: Mengirim request ke 2Captcha...")
+        print(f"  {Style.DIM + Fore.MAGENTA}🔍 DEBUG: API Key: {api_key[:10]}...{api_key[-5:]}")
     
     try:
-        # JANGAN gunakan proxy untuk 2Captcha API
         response = requests.post(
             create_task_url, 
             json=payload, 
@@ -92,17 +114,21 @@ def solve_captcha(api_key, proxy_dict):
         response.raise_for_status()
         data = response.json()
         
-        print(f"  🔍 DEBUG: Response dari createTask: {data}")
+        if SHOW_DEBUG:
+            print(f"  {Style.DIM + Fore.MAGENTA}🔍 DEBUG: Response dari createTask: {data}")
         
         if data.get("errorId") == 0:
             task_id = data.get("taskId")
-            print(f"  ✔️ Task CAPTCHA dibuat dengan ID: {task_id}")
+            if SHOW_DEBUG: # Task ID hanya tampil di mode DEBUG agar lebih bersih
+                print(f"  {Fore.GREEN}✔️ Task CAPTCHA dibuat dengan ID: {Style.BRIGHT}{task_id}")
         else:
-            print(f"  ❌ Error saat membuat task: {data.get('errorCode')} - {data.get('errorDescription')}")
+            if SHOW_DEBUG:
+                print(f"  {Fore.RED}❌ Error saat membuat task: {data.get('errorCode')} - {data.get('errorDescription')}")
             return None
             
     except requests.exceptions.RequestException as e:
-        print(f"  ❌ Terjadi kesalahan koneksi saat membuat task: {e}")
+        if SHOW_DEBUG:
+            print(f"  {Fore.RED}❌ Terjadi kesalahan koneksi saat membuat task: {e}")
         return None
 
     # 2. Get Result
@@ -111,16 +137,16 @@ def solve_captcha(api_key, proxy_dict):
     max_attempts = 24  # 2 menit maksimal (24 x 5 detik)
     attempts = 0
     
-    print(f"  ⏳ Menunggu hasil dari 2Captcha (max {max_attempts * 5} detik)...")
+    print(f"  {Fore.YELLOW}⏳ Menunggu hasil dari 2Captcha (max {max_attempts * 5} detik)...")
     
     while attempts < max_attempts:
         try:
             time.sleep(5)
             attempts += 1
             
-            print(f"  🔄 Attempt {attempts}/{max_attempts}: Checking result...")
+            if SHOW_DEBUG:
+                print(f"  {Style.DIM + Fore.CYAN}🔄 Attempt {attempts}/{max_attempts}: Checking result...")
             
-            # JANGAN gunakan proxy untuk 2Captcha API
             response = requests.post(
                 get_result_url, 
                 json=payload, 
@@ -129,36 +155,44 @@ def solve_captcha(api_key, proxy_dict):
             response.raise_for_status()
             data = response.json()
             
-            print(f"  🔍 DEBUG: Response attempt {attempts}: {data}")
+            if SHOW_DEBUG:
+                print(f"  {Style.DIM + Fore.MAGENTA}🔍 DEBUG: Response attempt {attempts}: {data}")
             
             if data.get("errorId") == 0:
                 if data.get("status") == "ready":
                     token = data.get("solution", {}).get("token")
-                    print("  ✅ CAPTCHA Berhasil diselesaikan!")
-                    print(f"  🔍 DEBUG: Token length: {len(token) if token else 0}")
+                    print(f"  {Fore.GREEN + Style.BRIGHT}✅ CAPTCHA Berhasil diselesaikan!")
+                    if SHOW_DEBUG:
+                        print(f"  {Style.DIM + Fore.MAGENTA}🔍 DEBUG: Token length: {len(token) if token else 0}")
                     return token
                 elif data.get("status") == "processing":
-                    print(f"  ⏳ Status: processing... ({attempts}/{max_attempts})")
+                    if SHOW_DEBUG:
+                        print(f"  {Fore.YELLOW}⏳ Status: processing... ({attempts}/{max_attempts})")
                     continue
                 else:
-                    print(f"  ❌ Status task tidak diketahui: {data.get('status')}")
+                    if SHOW_DEBUG:
+                        print(f"  {Fore.RED}❌ Status task tidak diketahui: {data.get('status')}")
                     return None
             else:
-                print(f"  ❌ Error saat mengambil hasil: {data.get('errorCode')} - {data.get('errorDescription')}")
+                if SHOW_DEBUG:
+                    print(f"  {Fore.RED}❌ Error saat mengambil hasil: {data.get('errorCode')} - {data.get('errorDescription')}")
                 return None
                 
         except requests.exceptions.Timeout:
-            print(f"  ⚠️ Timeout saat mengambil hasil, mencoba lagi...")
+            if SHOW_DEBUG:
+                print(f"  {Fore.YELLOW}⚠️ Timeout saat mengambil hasil, mencoba lagi...")
             continue
         except requests.exceptions.RequestException as e:
-            print(f"  ❌ Terjadi kesalahan koneksi saat mengambil hasil: {e}")
+            if SHOW_DEBUG:
+                print(f"  {Fore.RED}❌ Terjadi kesalahan koneksi saat mengambil hasil: {e}")
             return None
     
-    print(f"  ❌ Timeout: CAPTCHA tidak selesai setelah {max_attempts * 5} detik")
+    if SHOW_DEBUG:
+        print(f"  {Fore.RED}❌ Timeout: CAPTCHA tidak selesai setelah {max_attempts * 5} detik")
     return None
 
 def request_faucet_funds(address, captcha_token, proxy_dict):
-    """Mengirim request ke API faucet dengan alamat dan token CAPTCHA."""
+    """Mengirim request ke API faucet. Mengembalikan True jika berhasil, False jika gagal."""
     payload = {
         "json": {
             "rollupSubdomain": "sandbox-testnet",
@@ -172,7 +206,7 @@ def request_faucet_funds(address, captcha_token, proxy_dict):
     }
     final_payload = {"0": payload}
 
-    print(f"  ↪️ Mengirim request faucet untuk alamat: {address[:10]}...")
+    print(f"  {Fore.CYAN}↪️ Mengirim request faucet untuk alamat: {Style.BRIGHT}{address[:10]}...{address[-4:]}")
     
     try:
         response = requests.post(
@@ -188,29 +222,40 @@ def request_faucet_funds(address, captcha_token, proxy_dict):
         tx_hash = response_data[0].get("result", {}).get("data", {}).get("json", {}).get("transactionHash")
         
         if tx_hash:
-            print(f"  ✅ BERHASIL! Transaction Hash: {tx_hash}")
+            print(f"  {Fore.GREEN + Style.BRIGHT}✅ BERHASIL! Transaction Hash: {Fore.YELLOW}{tx_hash}")
+            return True  # <-- PERBAIKAN LOGIKA
         else:
-            print(f"  ❌ GAGAL! Respons tidak dikenali. Respons dari server:")
-            print(f"     {response_data}")
+            if SHOW_DEBUG:
+                print(f"  {Fore.RED}❌ GAGAL! Respons tidak dikenali. Respons dari server:")
+                print(f"     {Style.DIM}{response_data}")
             
     except requests.exceptions.HTTPError as e:
-        print(f"  ❌ GAGAL! HTTP Error: {e.response.status_code}")
-        try:
-            error_detail = e.response.json()
-            print(f"     Error detail: {error_detail}")
-        except:
-            print(f"     Respons: {e.response.text}")
+        if SHOW_DEBUG:
+            print(f"  {Fore.RED}❌ GAGAL! HTTP Error: {e.response.status_code}")
+            try:
+                error_data = e.response.json()
+                message = error_data[0]['error']['json']['message']
+                print(f"     {Fore.RED}Pesan: {message}")
+            except Exception:
+                print(f"     {Fore.RED}Respons: {e.response.text[:150]}...")
+    
     except requests.exceptions.ProxyError as e:
-        print(f"  ❌ GAGAL! Error Proxy: {e}")
+        if SHOW_DEBUG:
+            print(f"  {Fore.RED}❌ GAGAL! Error Proxy: {e}")
     except requests.exceptions.Timeout:
-        print(f"  ❌ GAGAL! Request timeout (proxy mungkin terlalu lambat)")
+        if SHOW_DEBUG:
+            print(f"  {Fore.RED}❌ GAGAL! Request timeout (proxy mungkin terlalu lambat)")
     except requests.exceptions.RequestException as e:
-        print(f"  ❌ GAGAL! Terjadi kesalahan koneksi: {e}")
+        if SHOW_DEBUG:
+            print(f"  {Fore.RED}❌ GAGAL! Terjadi kesalahan koneksi: {e}")
     except ValueError:
-        print("  ❌ GAGAL! Tidak bisa mem-parse respons JSON dari server.")
+        if SHOW_DEBUG:
+            print("  {Fore.RED}❌ GAGAL! Tidak bisa mem-parse respons JSON dari server.")
     except Exception as e:
-        print(f"  ❌ GAGAL! Error tidak terduga: {e}")
+        if SHOW_DEBUG:
+            print(f"  {Fore.RED}❌ GAGAL! Error tidak terduga: {e}")
 
+    return False  # <-- PERBAIKAN LOGIKA
 
 def process_all_wallets(api_key, wallets, proxies):
     """Memproses semua wallet sekali jalan."""
@@ -218,7 +263,9 @@ def process_all_wallets(api_key, wallets, proxies):
     failed_count = 0
     
     for i, wallet_address in enumerate(wallets):
-        print(f"\n[{i+1}/{len(wallets)}] Memproses wallet: {wallet_address}")
+        # Pembatas antar wallet
+        print(f"\n{Fore.CYAN}{'='*25}[ {i+1}/{len(wallets)} ]{'='*25}")
+        print(f"💎 {Style.BRIGHT}Memproses wallet: {Fore.YELLOW}{wallet_address}")
         
         # Memilih dan memformat proxy secara bergiliran
         proxy_dict = None
@@ -228,22 +275,33 @@ def process_all_wallets(api_key, wallets, proxies):
             
             if proxy_dict:
                 display_proxy = selected_proxy.split('@')[-1] if '@' in selected_proxy else selected_proxy
-                print(f"  🌐 Menggunakan proxy untuk faucet request: {display_proxy}")
-                print(f"  💡 Note: 2Captcha API TIDAK menggunakan proxy")
+                print(f"  {Fore.BLUE}🌐 Menggunakan proxy untuk faucet request: {Style.BRIGHT}{display_proxy}")
+                if SHOW_DEBUG:
+                    print(f"  {Style.DIM}💡 Note: 2Captcha API TIDAK menggunakan proxy")
 
         # 1. Selesaikan Captcha (TANPA PROXY)
         token = solve_captcha(api_key, None)
         
         # 2. Jika dapat token, request faucet (DENGAN PROXY)
         if token:
-            request_faucet_funds(wallet_address, token, proxy_dict)
-            success_count += 1
+            # --- PERBAIKAN LOGIKA ---
+            # Panggil fungsi DAN simpan hasilnya (True/False)
+            is_success = request_faucet_funds(wallet_address, token, proxy_dict)
+            
+            # Hanya tambah success jika DIBERI TAHU berhasil
+            if is_success:
+                success_count += 1
+            else:
+                failed_count += 1
+            # --- AKHIR PERBAIKAN ---
         else:
-            print("  ❌ Melewati request faucet karena gagal mendapatkan token CAPTCHA.")
+            # Gagal captcha sudah pasti gagal
+            if SHOW_DEBUG:
+                print(f"  {Fore.RED}❌ Melewati request faucet karena gagal mendapatkan token CAPTCHA.")
             failed_count += 1
         
         if i < len(wallets) - 1:
-            print("\n💤 Jeda 10 detik sebelum lanjut ke wallet berikutnya...")
+            print(f"\n{Fore.YELLOW}💤 Jeda 10 detik sebelum lanjut ke wallet berikutnya...")
             time.sleep(10)
     
     return success_count, failed_count
@@ -251,7 +309,6 @@ def process_all_wallets(api_key, wallets, proxies):
 
 def calculate_next_run_time(interval_hours=24):
     """Menghitung waktu run berikutnya."""
-    from datetime import datetime, timedelta
     next_run = datetime.now() + timedelta(hours=interval_hours)
     return next_run
 
@@ -265,7 +322,6 @@ def format_time_remaining(seconds):
 
 
 if __name__ == "__main__":
-    from datetime import datetime
     
     # Baca konfigurasi
     api_key_list = read_file_lines("2captcha.txt")
@@ -273,52 +329,60 @@ if __name__ == "__main__":
     proxies = read_file_lines("proxies.txt")
 
     if not api_key_list or not wallets:
-        print("\n❌ Pastikan file '2captcha.txt' dan 'wallets.txt' ada dan tidak kosong.")
+        print(f"\n{Fore.RED}❌ Pastikan file '2captcha.txt' dan 'wallets.txt' ada dan tidak kosong.")
         exit()
     
     API_KEY = api_key_list[0]
     
-    print("\n" + "="*60)
-    print("🔍 VALIDASI KONFIGURASI")
-    print("="*60)
-    print(f"✅ API Key 2Captcha: {API_KEY[:10]}...{API_KEY[-5:]}")
-    print(f"✅ Total Wallet: {len(wallets)}")
-    print(f"✅ Total Proxy: {len(proxies) if proxies else 0}")
+    print(f"\n{Fore.GREEN + Style.BRIGHT}{'='*60}")
+    print(f"🔍 {Style.BRIGHT}VALIDASI KONFIGURASI")
+    print(f"{Fore.GREEN + Style.BRIGHT}{'='*60}")
+    print(f"{Fore.GREEN}✅ API Key 2Captcha: {Style.BRIGHT}{API_KEY[:10]}...{API_KEY[-5:]}")
+    print(f"{Fore.GREEN}✅ Total Wallet: {Style.BRIGHT}{len(wallets)}")
+    print(f"{Fore.GREEN}✅ Total Proxy: {Style.BRIGHT}{len(proxies) if proxies else 0}")
     
     if not proxies:
-        print("\n⚠️  Peringatan: File 'proxies.txt' tidak ditemukan atau kosong.")
-        use_proxy = input("Lanjutkan TANPA PROXY? (y/n): ").lower()
+        print(f"\n{Fore.YELLOW}⚠️  Peringatan: File 'proxies.txt' tidak ditemukan atau kosong.")
+        try:
+            use_proxy = input(f"{Fore.YELLOW}Lanjutkan TANPA PROXY? (y/n): {Style.RESET_ALL}").lower()
+        except KeyboardInterrupt:
+            print(f"\n{Fore.RED}❌ Bot dibatalkan.")
+            exit()
         if use_proxy != 'y':
-            print("❌ Bot dibatalkan.")
+            print(f"{Fore.RED}❌ Bot dibatalkan.")
             exit()
     
     # Tanya mode operasi
-    print("\n" + "="*60)
-    print("🤖 BOT FAUCET AUTO LOOP")
-    print("="*60)
+    print(f"\n{Fore.CYAN + Style.BRIGHT}{'='*60}")
+    print(f"🤖 {Style.BRIGHT}BOT FAUCET AUTO LOOP")
+    print(f"{Fore.CYAN + Style.BRIGHT}{'='*60}")
     print("\nPilih mode operasi:")
-    print("1. Sekali jalan (run 1x lalu berhenti)")
-    print("2. Loop 24 jam (otomatis repeat setiap 24 jam)")
-    print("3. Loop custom (tentukan interval sendiri)")
+    print(f"{Style.BRIGHT}1. {Style.RESET_ALL}Sekali jalan (run 1x lalu berhenti)")
+    print(f"{Style.BRIGHT}2. {Style.RESET_ALL}Loop 24 jam (otomatis repeat setiap 24 jam)") # <-- PERBAIKAN TYPO
+    print(f"{Style.BRIGHT}3. {Style.RESET_ALL}Loop custom (tentukan interval sendiri)")     # <-- PERBAIKAN TYPO
     
-    mode = input("\nPilih mode (1/2/3): ").strip()
+    try:
+        mode = input(f"\n{Style.BRIGHT}Pilih mode (1/2/3): {Style.RESET_ALL}").strip()
+    except KeyboardInterrupt:
+        print(f"\n{Fore.RED}❌ Bot dibatalkan.")
+        exit()
     
     if mode == "1":
-        print(f"\n🚀 Bot Faucet Dimulai! Total wallet: {len(wallets)}")
-        print("-" * 50)
+        print(f"\n{Fore.GREEN + Style.BRIGHT}🚀 Bot Faucet Dimulai! Total wallet: {len(wallets)}")
+        print(f"{Fore.GREEN}{'-' * 50}")
         
         success, failed = process_all_wallets(API_KEY, wallets, proxies)
         
-        print("\n" + "="*60)
-        print("🎉 Semua wallet telah selesai diproses!")
-        print(f"✅ Berhasil: {success} | ❌ Gagal: {failed}")
-        print("="*60)
+        print(f"\n{Fore.GREEN + Style.BRIGHT}{'='*60}")
+        print(f"🎉 {Style.BRIGHT}Semua wallet telah selesai diproses!")
+        print(f"{Fore.GREEN}✅ Berhasil: {Style.BRIGHT}{success}{Style.RESET_ALL} | {Fore.RED}❌ Gagal: {Style.BRIGHT}{failed}")
+        print(f"{Fore.GREEN + Style.BRIGHT}{'='*60}")
         
     elif mode == "2":
         interval_hours = 24
         run_count = 0
         
-        print(f"\n🔄 Mode Loop 24 Jam Aktif!")
+        print(f"\n{Fore.CYAN + Style.BRIGHT}🔄 Mode Loop 24 Jam Aktif!")
         print(f"Bot akan berjalan setiap {interval_hours} jam secara otomatis.")
         print("Tekan Ctrl+C untuk menghentikan bot.\n")
         
@@ -327,52 +391,56 @@ if __name__ == "__main__":
                 run_count += 1
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                print("\n" + "="*60)
-                print(f"🚀 RUN #{run_count} - {now}")
-                print(f"📊 Total wallet: {len(wallets)}")
-                print("="*60)
+                print(f"\n{Fore.GREEN + Style.BRIGHT}{'='*60}")
+                print(f"🚀 {Style.BRIGHT}RUN #{run_count} - {now}")
+                print(f"📊 {Style.BRIGHT}Total wallet: {len(wallets)}")
+                print(f"{Fore.GREEN + Style.BRIGHT}{'='*60}")
                 
                 success, failed = process_all_wallets(API_KEY, wallets, proxies)
                 
-                print("\n" + "="*60)
-                print(f"✅ Run #{run_count} selesai!")
-                print(f"✅ Berhasil: {success} | ❌ Gagal: {failed}")
-                print("="*60)
+                print(f"\n{Fore.GREEN + Style.BRIGHT}{'='*60}")
+                print(f"✅ {Style.BRIGHT}Run #{run_count} selesai!")
+                print(f"{Fore.GREEN}✅ Berhasil: {Style.BRIGHT}{success}{Style.RESET_ALL} | {Fore.RED}❌ Gagal: {Style.BRIGHT}{failed}")
+                print(f"{Fore.GREEN + Style.BRIGHT}{'='*60}")
                 
                 next_run = calculate_next_run_time(interval_hours)
                 next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
                 wait_seconds = interval_hours * 3600
                 
-                print(f"\n⏰ Next run dijadwalkan pada: {next_run_str}")
-                print(f"💤 Menunggu {interval_hours} jam ({wait_seconds} detik)...")
+                print(f"\n{Fore.CYAN}⏰ Next run dijadwalkan pada: {Style.BRIGHT}{next_run_str}")
+                print(f"{Fore.CYAN}💤 Menunggu {interval_hours} jam ({wait_seconds} detik)...")
                 
                 try:
                     for remaining in range(wait_seconds, 0, -60):
                         time_str = format_time_remaining(remaining)
-                        print(f"\r⏳ Sisa waktu: {time_str}   ", end='', flush=True)
+                        print(f"\r{Fore.YELLOW}⏳ Sisa waktu: {Style.BRIGHT}{time_str}{Style.RESET_ALL}   ", end='', flush=True)
                         time.sleep(60)
-                    print("\r✅ Waktu tunggu selesai!              ")
+                    print(f"\r{Fore.GREEN}✅ Waktu tunggu selesai!              ")
                 except KeyboardInterrupt:
                     raise
                     
         except KeyboardInterrupt:
-            print("\n\n⚠️  Bot dihentikan oleh user (Ctrl+C)")
+            print(f"\n\n{Fore.YELLOW}⚠️  Bot dihentikan oleh user (Ctrl+C)")
             print(f"📊 Total run yang telah dilakukan: {run_count}")
-            print("👋 Terima kasih telah menggunakan bot!")
+            print(f"{Fore.CYAN}👋 Terima kasih telah menggunakan bot!")
             
     elif mode == "3":
         try:
-            interval_hours = float(input("Masukkan interval dalam JAM (misal: 12, 6, 0.5): "))
+            interval_hours_input = input(f"{Style.BRIGHT}Masukkan interval dalam JAM (misal: 12, 6, 0.5): {Style.RESET_ALL}")
+            interval_hours = float(interval_hours_input)
             if interval_hours <= 0:
-                print("❌ Interval harus lebih dari 0!")
+                print(f"{Fore.RED}❌ Interval harus lebih dari 0!")
                 exit()
         except ValueError:
-            print("❌ Input tidak valid!")
+            print(f"{Fore.RED}❌ Input tidak valid!")
+            exit()
+        except KeyboardInterrupt:
+            print(f"\n{Fore.RED}❌ Bot dibatalkan.")
             exit()
         
         run_count = 0
         
-        print(f"\n🔄 Mode Loop Custom Aktif!")
+        print(f"\n{Fore.CYAN + Style.BRIGHT}🔄 Mode Loop Custom Aktif!")
         print(f"Bot akan berjalan setiap {interval_hours} jam secara otomatis.")
         print("Tekan Ctrl+C untuk menghentikan bot.\n")
         
@@ -381,40 +449,40 @@ if __name__ == "__main__":
                 run_count += 1
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                print("\n" + "="*60)
-                print(f"🚀 RUN #{run_count} - {now}")
-                print(f"📊 Total wallet: {len(wallets)}")
-                print("="*60)
+                print(f"\n{Fore.GREEN + Style.BRIGHT}{'='*60}")
+                print(f"🚀 {Style.BRIGHT}RUN #{run_count} - {now}")
+                print(f"📊 {Style.BRIGHT}Total wallet: {len(wallets)}")
+                print(f"{Fore.GREEN + Style.BRIGHT}{'='*60}")
                 
                 success, failed = process_all_wallets(API_KEY, wallets, proxies)
                 
-                print("\n" + "="*60)
-                print(f"✅ Run #{run_count} selesai!")
-                print(f"✅ Berhasil: {success} | ❌ Gagal: {failed}")
-                print("="*60)
+                print(f"\n{Fore.GREEN + Style.BRIGHT}{'='*60}")
+                print(f"✅ {Style.BRIGHT}Run #{run_count} selesai!")
+                print(f"{Fore.GREEN}✅ Berhasil: {Style.BRIGHT}{success}{Style.RESET_ALL} | {Fore.RED}❌ Gagal: {Style.BRIGHT}{failed}")
+                print(f"{Fore.GREEN + Style.BRIGHT}{'='*60}")
                 
                 next_run = calculate_next_run_time(interval_hours)
                 next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
                 wait_seconds = int(interval_hours * 3600)
                 
-                print(f"\n⏰ Next run dijadwalkan pada: {next_run_str}")
+                print(f"\n{Fore.CYAN}⏰ Next run dijadwalkan pada: {Style.BRIGHT}{next_run_str}")
                 print(f"💤 Menunggu {interval_hours} jam ({wait_seconds} detik)...")
                 
                 try:
                     update_interval = 60 if wait_seconds > 120 else 10
                     for remaining in range(wait_seconds, 0, -update_interval):
                         time_str = format_time_remaining(remaining)
-                        print(f"\r⏳ Sisa waktu: {time_str}   ", end='', flush=True)
+                        print(f"\r{Fore.YELLOW}⏳ Sisa waktu: {Style.BRIGHT}{time_str}{Style.RESET_ALL}   ", end='', flush=True)
                         time.sleep(update_interval)
-                    print("\r✅ Waktu tunggu selesai!              ")
+                    print(f"\r{Fore.GREEN}✅ Waktu tunggu selesai!              ")
                 except KeyboardInterrupt:
                     raise
                     
         except KeyboardInterrupt:
-            print("\n\n⚠️  Bot dihentikan oleh user (Ctrl+C)")
+            print(f"\n\n{Fore.YELLOW}⚠️  Bot dihentikan oleh user (Ctrl+C)")
             print(f"📊 Total run yang telah dilakukan: {run_count}")
-            print("👋 Terima kasih telah menggunakan bot!")
+            print(f"{Fore.CYAN}👋 Terima kasih telah menggunakan bot!")
     
     else:
-        print("❌ Pilihan tidak valid!")
+        print(f"{Fore.RED}❌ Pilihan tidak valid!")
         exit()
