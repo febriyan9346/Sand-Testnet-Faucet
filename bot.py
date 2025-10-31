@@ -43,19 +43,14 @@ def format_proxy(proxy_string):
     if not proxy_string:
         return None
     
-    # Hapus whitespace yang mungkin ada
     proxy_string = proxy_string.strip()
     
-    # Jika sudah ada protocol, gunakan langsung
     if proxy_string.startswith(('http://', 'https://', 'socks5://', 'socks4://')):
         proxy_url = proxy_string
     else:
-        # Tambahkan http:// jika belum ada
         proxy_url = f'http://{proxy_string}'
     
-    # Validasi format proxy
     try:
-        # Test parsing URL
         if '://' in proxy_url:
             protocol, rest = proxy_url.split('://', 1)
             if not rest:
@@ -84,16 +79,20 @@ def solve_captcha(api_key, proxy_dict):
         }
     }
     
+    print(f"  🔍 DEBUG: Mengirim request ke 2Captcha...")
+    print(f"  🔍 DEBUG: API Key: {api_key[:10]}...{api_key[-5:]}")
+    
     try:
-        # Menggunakan proxy jika tersedia
+        # JANGAN gunakan proxy untuk 2Captcha API
         response = requests.post(
             create_task_url, 
             json=payload, 
-            proxies=proxy_dict, 
             timeout=30
         )
         response.raise_for_status()
         data = response.json()
+        
+        print(f"  🔍 DEBUG: Response dari createTask: {data}")
         
         if data.get("errorId") == 0:
             task_id = data.get("taskId")
@@ -102,43 +101,115 @@ def solve_captcha(api_key, proxy_dict):
             print(f"  ❌ Error saat membuat task: {data.get('errorCode')} - {data.get('errorDescription')}")
             return None
             
+    except requests.exceptions.RequestException as e:
+        print(f"  ❌ Terjadi kesalahan koneksi saat membuat task: {e}")
+        return None
+
+    # 2. Get Result
+    get_result_url = "https://api.2captcha.com/getTaskResult"
+    payload = {"clientKey": api_key, "taskId": task_id}
+    max_attempts = 24  # 2 menit maksimal (24 x 5 detik)
+    attempts = 0
+    
+    print(f"  ⏳ Menunggu hasil dari 2Captcha (max {max_attempts * 5} detik)...")
+    
+    while attempts < max_attempts:
+        try:
+            time.sleep(5)
+            attempts += 1
+            
+            print(f"  🔄 Attempt {attempts}/{max_attempts}: Checking result...")
+            
+            # JANGAN gunakan proxy untuk 2Captcha API
+            response = requests.post(
+                get_result_url, 
+                json=payload, 
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            print(f"  🔍 DEBUG: Response attempt {attempts}: {data}")
+            
+            if data.get("errorId") == 0:
+                if data.get("status") == "ready":
+                    token = data.get("solution", {}).get("token")
+                    print("  ✅ CAPTCHA Berhasil diselesaikan!")
+                    print(f"  🔍 DEBUG: Token length: {len(token) if token else 0}")
+                    return token
+                elif data.get("status") == "processing":
+                    print(f"  ⏳ Status: processing... ({attempts}/{max_attempts})")
+                    continue
+                else:
+                    print(f"  ❌ Status task tidak diketahui: {data.get('status')}")
+                    return None
+            else:
+                print(f"  ❌ Error saat mengambil hasil: {data.get('errorCode')} - {data.get('errorDescription')}")
+                return None
+                
+        except requests.exceptions.Timeout:
+            print(f"  ⚠️ Timeout saat mengambil hasil, mencoba lagi...")
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f"  ❌ Terjadi kesalahan koneksi saat mengambil hasil: {e}")
+            return None
+    
+    print(f"  ❌ Timeout: CAPTCHA tidak selesai setelah {max_attempts * 5} detik")
+    return None
+
+def request_faucet_funds(address, captcha_token, proxy_dict):
+    """Mengirim request ke API faucet dengan alamat dan token CAPTCHA."""
+    payload = {
+        "json": {
+            "rollupSubdomain": "sandbox-testnet",
+            "recipientAddress": address,
+            "turnstileToken": captcha_token,
+            "tokenRollupAddress": None
+        },
+        "meta": {
+            "values": { "tokenRollupAddress": ["undefined"] }
+        }
+    }
+    final_payload = {"0": payload}
+
+    print(f"  ↪️ Mengirim request faucet untuk alamat: {address[:10]}...")
+    
+    try:
+        response = requests.post(
+            FAUCET_API_URL, 
+            headers=HEADERS, 
+            json=final_payload, 
+            proxies=proxy_dict, 
+            timeout=45
+        )
+        response.raise_for_status()
+        
+        response_data = response.json()
+        tx_hash = response_data[0].get("result", {}).get("data", {}).get("json", {}).get("transactionHash")
+        
+        if tx_hash:
+            print(f"  ✅ BERHASIL! Transaction Hash: {tx_hash}")
+        else:
+            print(f"  ❌ GAGAL! Respons tidak dikenali. Respons dari server:")
+            print(f"     {response_data}")
+            
+    except requests.exceptions.HTTPError as e:
+        print(f"  ❌ GAGAL! HTTP Error: {e.response.status_code}")
+        try:
+            error_detail = e.response.json()
+            print(f"     Error detail: {error_detail}")
+        except:
+            print(f"     Respons: {e.response.text}")
     except requests.exceptions.ProxyError as e:
-        print(f"  ❌ Error Proxy saat membuat task: {e}")
-        print(f"  💡 Tip: Periksa format proxy Anda (harus: ip:port atau user:pass@ip:port)")
-        return None
+        print(f"  ❌ GAGAL! Error Proxy: {e}")
     except requests.exceptions.Timeout:
-        print(f"  ❌ Timeout saat membuat task (mungkin proxy lambat atau tidak merespon)")
-        return None
+        print(f"  ❌ GAGAL! Request timeout (proxy mungkin terlalu lambat)")
     except requests.exceptions.RequestException as e:
         print(f"  ❌ GAGAL! Terjadi kesalahan koneksi: {e}")
     except ValueError:
         print("  ❌ GAGAL! Tidak bisa mem-parse respons JSON dari server.")
     except Exception as e:
         print(f"  ❌ GAGAL! Error tidak terduga: {e}")
-
-
-def test_proxy(proxy_dict):
-    """Test apakah proxy berfungsi dengan baik."""
-    if not proxy_dict:
-        return True  # Tidak ada proxy, skip test
-    
-    print("  🔍 Testing proxy connection...")
-    try:
-        response = requests.get(
-            "https://api.ipify.org?format=json", 
-            proxies=proxy_dict, 
-            timeout=10
-        )
-        if response.status_code == 200:
-            ip = response.json().get('ip', 'unknown')
-            print(f"  ✅ Proxy berfungsi! IP: {ip}")
-            return True
-        else:
-            print(f"  ⚠️ Proxy merespon dengan status code: {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"  ❌ Proxy test gagal: {e}")
-        return False
 
 
 def process_all_wallets(api_key, wallets, proxies):
@@ -156,18 +227,16 @@ def process_all_wallets(api_key, wallets, proxies):
             proxy_dict = format_proxy(selected_proxy)
             
             if proxy_dict:
-                # Tampilkan proxy yang digunakan (sembunyikan credential jika ada)
                 display_proxy = selected_proxy.split('@')[-1] if '@' in selected_proxy else selected_proxy
-                print(f"  🌐 Menggunakan proxy: {display_proxy}")
-            else:
-                print("  ⚠️ Format proxy tidak valid, melanjutkan tanpa proxy...")
+                print(f"  🌐 Menggunakan proxy untuk faucet request: {display_proxy}")
+                print(f"  💡 Note: 2Captcha API TIDAK menggunakan proxy")
 
-        # 1. Selesaikan Captcha
-        token = solve_captcha(api_key, proxy_dict)
+        # 1. Selesaikan Captcha (TANPA PROXY)
+        token = solve_captcha(api_key, None)
         
-        # 2. Jika dapat token, request faucet
+        # 2. Jika dapat token, request faucet (DENGAN PROXY)
         if token:
-            result = request_faucet_funds(wallet_address, token, proxy_dict)
+            request_faucet_funds(wallet_address, token, proxy_dict)
             success_count += 1
         else:
             print("  ❌ Melewati request faucet karena gagal mendapatkan token CAPTCHA.")
@@ -209,8 +278,15 @@ if __name__ == "__main__":
     
     API_KEY = api_key_list[0]
     
+    print("\n" + "="*60)
+    print("🔍 VALIDASI KONFIGURASI")
+    print("="*60)
+    print(f"✅ API Key 2Captcha: {API_KEY[:10]}...{API_KEY[-5:]}")
+    print(f"✅ Total Wallet: {len(wallets)}")
+    print(f"✅ Total Proxy: {len(proxies) if proxies else 0}")
+    
     if not proxies:
-        print("⚠️  Peringatan: File 'proxies.txt' tidak ditemukan atau kosong.")
+        print("\n⚠️  Peringatan: File 'proxies.txt' tidak ditemukan atau kosong.")
         use_proxy = input("Lanjutkan TANPA PROXY? (y/n): ").lower()
         if use_proxy != 'y':
             print("❌ Bot dibatalkan.")
@@ -228,7 +304,6 @@ if __name__ == "__main__":
     mode = input("\nPilih mode (1/2/3): ").strip()
     
     if mode == "1":
-        # Mode sekali jalan
         print(f"\n🚀 Bot Faucet Dimulai! Total wallet: {len(wallets)}")
         print("-" * 50)
         
@@ -240,7 +315,6 @@ if __name__ == "__main__":
         print("="*60)
         
     elif mode == "2":
-        # Mode loop 24 jam
         interval_hours = 24
         run_count = 0
         
@@ -265,16 +339,13 @@ if __name__ == "__main__":
                 print(f"✅ Berhasil: {success} | ❌ Gagal: {failed}")
                 print("="*60)
                 
-                # Hitung waktu next run
                 next_run = calculate_next_run_time(interval_hours)
                 next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
                 wait_seconds = interval_hours * 3600
                 
                 print(f"\n⏰ Next run dijadwalkan pada: {next_run_str}")
                 print(f"💤 Menunggu {interval_hours} jam ({wait_seconds} detik)...")
-                print("   (Tekan Ctrl+C untuk menghentikan)")
                 
-                # Countdown timer
                 try:
                     for remaining in range(wait_seconds, 0, -60):
                         time_str = format_time_remaining(remaining)
@@ -290,7 +361,6 @@ if __name__ == "__main__":
             print("👋 Terima kasih telah menggunakan bot!")
             
     elif mode == "3":
-        # Mode loop custom
         try:
             interval_hours = float(input("Masukkan interval dalam JAM (misal: 12, 6, 0.5): "))
             if interval_hours <= 0:
@@ -323,16 +393,13 @@ if __name__ == "__main__":
                 print(f"✅ Berhasil: {success} | ❌ Gagal: {failed}")
                 print("="*60)
                 
-                # Hitung waktu next run
                 next_run = calculate_next_run_time(interval_hours)
                 next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
                 wait_seconds = int(interval_hours * 3600)
                 
                 print(f"\n⏰ Next run dijadwalkan pada: {next_run_str}")
                 print(f"💤 Menunggu {interval_hours} jam ({wait_seconds} detik)...")
-                print("   (Tekan Ctrl+C untuk menghentikan)")
                 
-                # Countdown timer
                 try:
                     update_interval = 60 if wait_seconds > 120 else 10
                     for remaining in range(wait_seconds, 0, -update_interval):
